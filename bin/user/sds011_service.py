@@ -65,7 +65,7 @@ weewx.units.USUnits['group_concentration'] = 'microgram_per_meter_cubed'
 weewx.units.MetricUnits['group_concentration'] = 'microgram_per_meter_cubed'
 weewx.units.MetricWXUnits['group_concentration'] = 'microgram_per_meter_cubed'
 weewx.units.default_unit_format_dict['microgram_per_meter_cubed'] = '%.3f'
-weewx.units.default_unit_label_dict['microgram_per_meter_cubed']  = ' \xc2\xb5g/m\xc2\xb3'
+weewx.units.default_unit_label_dict['microgram_per_meter_cubed']  = 'µg/m³'
 
 # assign types of units to specific measurements
 weewx.units.obs_group_dict['pm2_5'] = 'group_concentration'
@@ -146,9 +146,9 @@ class SDS011Extension(StdService):
         for n in range(self.max_tries):
             try:
                 self.sensor.sensor_wake()
-                #print('here')
+                print('here')
                 retval= self.sensor.get_data()
-                #print(retval)
+                print(retval)
                 self.sensor.close()
                 return retval
 
