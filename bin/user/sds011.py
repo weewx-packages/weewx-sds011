@@ -1,12 +1,13 @@
 #!/usr/bin/env python
-# Copyright 2021 sbsrouteur
-# Distributed under the terms of the MIT
+# Copyright 2019 Matthew Wall
+# Distributed under the terms of the GNU Public License (GPLv3)
 
+"""Driver for collecting data from SDS011 particulate sensor.
 """Service for collecting data from SDS011 particulate sensor.
 
+"""Apparently if you poll the device too often you will get bogus data.
+
 Credits:
-2020 Matthew Wall SDS011 Weewx Driver
-  https://github.com/matthewwall/weewx-sds011
 
 2016 Frank Heuer
   https://gitlab.com/frankrich/sds011_particle_sensor
@@ -21,15 +22,15 @@ Credits:
 import struct
 import syslog
 import time
-from datetime import datetime
-from datetime import timedelta
 
 import weewx
-import weewx.units
-from weewx.engine import StdService
+import weewx.drivers
+
+
+DRIVER_NAME = 'SDS011'
+DRIVER_VERSION = '0.2'
 
 VERSION = '0.1'
-
 
 printlog = False
 
@@ -40,13 +41,17 @@ def logmsg(dst, msg):
     syslog.syslog(dst, msg)
 
 def logdbg(msg):
-    logmsg(syslog.LOG_INFO, msg)
+    logmsg(syslog.LOG_DEBUG, msg)
 
 def loginf(msg):
     logmsg(syslog.LOG_INFO, msg)
 
 def logerr(msg):
     logmsg(syslog.LOG_ERR, msg)
+
+
+def loader(config_dict, _):
+    return SDS011Driver(**config_dict[DRIVER_NAME])
 
 def confeditor_loader():
     return SDS011ConfEditor()
@@ -71,7 +76,6 @@ weewx.units.default_unit_label_dict['microgram_per_meter_cubed']  = 'µg/m³'
 weewx.units.obs_group_dict['pm2_5'] = 'group_concentration'
 weewx.units.obs_group_dict['pm10_0'] = 'group_concentration'
 
-'''
 class SDS011ConfEditor(weewx.drivers.AbstractConfEditor):
     @property
     def default_stanza(self):
@@ -91,11 +95,63 @@ class SDS011ConfEditor(weewx.drivers.AbstractConfEditor):
 """
 
     def prompt_for_settings(self):
-        print ("Specify the serial port on which the sensor is connected, for")
-        print ("example /dev/ttyUSB0 or /dev/ttyS0 or /dev/tty.usbserial")
+        print "Specify the serial port on which the sensor is connected, for"
+        print "example /dev/ttyUSB0 or /dev/ttyS0 or /dev/tty.usbserial"
         port = self._prompt('port', '/dev/ttyUSB0')
         return {'port': port}
-'''
+
+
+class SDS011Driver(weewx.drivers.AbstractDevice):
+
+    def __init__(self, **stn_dict):
+        loginf('driver version is %s' % DRIVER_VERSION)
+        self.model = stn_dict.get('model', 'NovaPM')
+        loginf("model is %s" % self.model)
+        port = stn_dict.get('port', SDS011.DEFAULT_PORT)
+        loginf("port is %s" % port)
+        timeout = int(stn_dict.get('timeout', SDS011.DEFAULT_TIMEOUT))
+        self.poll_interval = int(stn_dict.get('poll_interval', 30))
+        loginf("poll interval is %s" % self.poll_interval)
+        if self.poll_interval < 10:
+            loginf("warning: short poll interval may result in bad data")
+        self.max_tries = int(stn_dict.get('max_tries', 3))
+        self.retry_wait = int(stn_dict.get('retry_wait', 5))
+        self.sensor = SDS011(port, timeout)
+        self.sensor.open()
+
+    @property
+    def hardware_name(self):
+        return self.model
+
+    def closePort(self):
+        self.sensor.close()
+        self.sensor = None
+
+    def genLoopPackets(self):
+        while True:
+            pm2_5, pm10_0 = self._get_with_retries()
+            logdbg("data: %s %s" % (pm2_5, pm10_0))
+            pkt = dict()
+            pkt['dateTime'] = int(time.time() + 0.5)
+            pkt['usUnits'] = weewx.METRICWX
+            pkt['pm2_5'] = pm2_5
+            pkt['pm10_0'] = pm10_0
+            yield pkt
+            if self.poll_interval:
+                time.sleep(self.poll_interval)
+
+    def _get_with_retries(self):
+        for n in range(self.max_tries):
+            try:
+                return self.sensor.get_data()
+            except (IOError, ValueError, TypeError), e:
+                loginf("failed attempt %s of %s: %s" %
+                       (n + 1, self.max_tries, e))
+                time.sleep(self.retry_wait)
+        else:
+            raise weewx.WeeWxIOError("%s: max tries %s exceeded" %
+                                     (method, self.max_tries))
+
 
 class SDS011Extension(StdService):
 
@@ -161,9 +217,8 @@ class SDS011Extension(StdService):
                                      (method, self.max_tries))
 
 
-
 def _fmt(x):
-    return x
+    return ' '.join(["%0.2X" % ord(c) for c in x])
 
 
 class SDS011(object):
@@ -197,7 +252,6 @@ class SDS011(object):
         self.serial_port = serial.Serial(port=self.port,
                                          baudrate=self.baudrate,
                                          timeout=self.timeout)
-        self.serial_port.close()
         self.serial_port.open()
         self.serial_port.flushInput()
 
@@ -208,7 +262,7 @@ class SDS011(object):
 
     @staticmethod
     def _chksum(raw):
-        return sum(raw[2:8])% 256
+        return sum(ord(v) for v in raw[2:8]) % 256
 
     @staticmethod
     def _cmd(cmd, data=[]):
@@ -245,12 +299,11 @@ class SDS011(object):
     def write_command(self, cmd, data=[]):
         x = SDS011._cmd(cmd, data)
         logdbg("write: %s" % _fmt(x))
-        logdbg("write: %s" % _fmt(x))
-        self.serial_port.write(x.encode())
+        self.serial_port.write(x)
 
     def read_bytes(self):
         x = 0
-        while x != b"\xaa":
+        while x != "\xaa":
             x = self.serial_port.read(size=1)
         data = self.serial_port.read(size=9)
         logdbg("read: %s" % _fmt(data))
@@ -270,7 +323,6 @@ class SDS011(object):
         mode = 0 if period else 1
         self.write_command(SDS011.CMD_SLEEP, [0x1, mode])
         raw = self.read_bytes()
-        
 
     def set_working_period(self, period):
         self.write_command(SDS011.CMD_WORKING_PERIOD, [0x1, period])
@@ -291,9 +343,6 @@ class SDS011(object):
 
     def sensor_sleep(self):
         self.set_sleep(1)
-
-
-   
 
 
 if __name__ == '__main__':
@@ -328,7 +377,7 @@ if __name__ == '__main__':
     (options, _) = parser.parse_args()
 
     if options.version:
-        print ("driver version %s" % VERSION)
+        print "driver version %s" % DRIVER_VERSION
         exit(1)
 
     if options.debug is not None:
@@ -341,7 +390,6 @@ if __name__ == '__main__':
     s.open()
 
     if options.info:
-        print("get firmware version")
         print("firmware: %s" % s.get_firmware_version())
         exit(0)
 
@@ -359,12 +407,7 @@ if __name__ == '__main__':
         s.set_work(options.work)
     else:
         while True:
-            time.sleep(options.poll_interval)
             s.sensor_wake()
-            print('waked')
-            print('getting data')
+            time.sleep(options.poll_interval)
             pm2_5, pm10_0 = s.get_data()
             print("pm2_5=%s pm10_0=%s" % (pm2_5, pm10_0))
-            s.set_sleep(30)
-            print('looping')
-            
