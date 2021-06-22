@@ -3,9 +3,9 @@
 # Distributed under the terms of the GNU Public License (GPLv3)
 
 """Driver for collecting data from SDS011 particulate sensor.
-"""Service for collecting data from SDS011 particulate sensor.
+   Service for collecting data from SDS011 particulate sensor.
 
-"""Apparently if you poll the device too often you will get bogus data.
+   Apparently if you poll the device too often you will get bogus data.
 
 Credits:
 
@@ -22,17 +22,21 @@ Credits:
 import struct
 import syslog
 import time
+from datetime import datetime
+from datetime import timedelta
 
 import weewx
 import weewx.drivers
 
+import weewx.units
+from weewx.engine import StdService
 
 DRIVER_NAME = 'SDS011'
 DRIVER_VERSION = '0.2'
 
 VERSION = '0.1'
 
-printlog = False
+printlog = True
 
 def logmsg(dst, msg):
     msg = 'SDS011: %s' % msg
@@ -95,8 +99,8 @@ class SDS011ConfEditor(weewx.drivers.AbstractConfEditor):
 """
 
     def prompt_for_settings(self):
-        print "Specify the serial port on which the sensor is connected, for"
-        print "example /dev/ttyUSB0 or /dev/ttyS0 or /dev/tty.usbserial"
+        print ("Specify the serial port on which the sensor is connected, for")
+        print ("example /dev/ttyUSB0 or /dev/ttyS0 or /dev/tty.usbserial")
         port = self._prompt('port', '/dev/ttyUSB0')
         return {'port': port}
 
@@ -105,6 +109,7 @@ class SDS011Driver(weewx.drivers.AbstractDevice):
 
     def __init__(self, **stn_dict):
         loginf('driver version is %s' % DRIVER_VERSION)
+        #print('driver version is %s' % DRIVER_VERSION)
         self.model = stn_dict.get('model', 'NovaPM')
         loginf("model is %s" % self.model)
         port = stn_dict.get('port', SDS011.DEFAULT_PORT)
@@ -116,6 +121,7 @@ class SDS011Driver(weewx.drivers.AbstractDevice):
             loginf("warning: short poll interval may result in bad data")
         self.max_tries = int(stn_dict.get('max_tries', 3))
         self.retry_wait = int(stn_dict.get('retry_wait', 5))
+        print("Driver opening port")
         self.sensor = SDS011(port, timeout)
         self.sensor.open()
 
@@ -144,9 +150,10 @@ class SDS011Driver(weewx.drivers.AbstractDevice):
         for n in range(self.max_tries):
             try:
                 return self.sensor.get_data()
-            except (IOError, ValueError, TypeError), e:
+            #except (IOError, ValueError, TypeError), e:
+            except e:
                 loginf("failed attempt %s of %s: %s" %
-                       (n + 1, self.max_tries, e))
+                    (n + 1, self.max_tries, e))
                 time.sleep(self.retry_wait)
         else:
             raise weewx.WeeWxIOError("%s: max tries %s exceeded" %
@@ -156,9 +163,11 @@ class SDS011Driver(weewx.drivers.AbstractDevice):
 class SDS011Extension(StdService):
 
     def __init__(self, engine, config_dict):
+        
+        weewx.debug=1
         super(SDS011Extension, self).__init__(engine, config_dict)        
         loginf('sds011 Extension version is %s' % VERSION)
-        self.model = config_dict.get('model', 'NovaPM')
+        self.model = config_dict.get('model', 'SDS011')
         loginf("model is %s" % self.model)
         port = config_dict.get('port', SDS011.DEFAULT_PORT)
         loginf("port is %s" % port)
@@ -172,6 +181,7 @@ class SDS011Extension(StdService):
         self.sensor = SDS011(port, timeout)
         self.PrevTime = datetime.now()
         self.bind(weewx.NEW_LOOP_PACKET, self.new_loop_packet)
+        #print("Init Complete");
         
     def closePort(self):
         self.sensor.close()
@@ -190,6 +200,7 @@ class SDS011Extension(StdService):
         self.PrevTime=CurTime
         pm2_5, pm10_0 = self._get_with_retries()
         logdbg("data: %s %s" % (pm2_5, pm10_0))
+        #print("data: %s %s" % (pm2_5, pm10_0))
         #packet = dict()
         #packet['dateTime'] = int(time.time() + 0.5)
         packet['pm2_5'] = pm2_5
@@ -198,18 +209,20 @@ class SDS011Extension(StdService):
         logdbg(packet)
     
     def _get_with_retries(self):
+        
         self.sensor.open()
+        
         for n in range(self.max_tries):
             try:
                 self.sensor.sensor_wake()
-                print('here')
                 retval= self.sensor.get_data()
-                print(retval)
                 self.sensor.close()
                 return retval
 
             except (IOError, ValueError, TypeError) as e:
-                loginf("failed attempt %s of %s: %s" %
+                logerr("failed attempt %s of %s: %s" %
+                       (n + 1, self.max_tries, e))
+                print("failed attempt %s of %s: %s" %
                        (n + 1, self.max_tries, e))
                 time.sleep(self.retry_wait)
         else:
@@ -239,6 +252,7 @@ class SDS011(object):
         self.baudrate = self.DEFAULT_BAUDRATE
         self.timeout = timeout
         self.serial_port = None
+        logdbg('SDS011 inited')
 
     def __enter__(self):
         self.open()
@@ -249,12 +263,18 @@ class SDS011(object):
 
     def open(self):
         import serial
-        self.serial_port = serial.Serial(port=self.port,
+        
+        logdbg("open %s %d %f" % (self.port,self.baudrate, self.timeout))
+        try:
+            self.serial_port = serial.Serial(port=self.port,
                                          baudrate=self.baudrate,
                                          timeout=self.timeout)
-        self.serial_port.open()
-        self.serial_port.flushInput()
-
+                 
+            self.serial_port.open()
+            self.serial_port.flushInput()
+            logdbg("opened")
+        except :
+            logdbg("failed open  " )   
     def close(self):
         if self.serial_port:
             self.serial_port.close()
@@ -262,7 +282,7 @@ class SDS011(object):
 
     @staticmethod
     def _chksum(raw):
-        return sum(ord(v) for v in raw[2:8]) % 256
+        return sum(raw[2:8])% 256 
 
     @staticmethod
     def _cmd(cmd, data=[]):
@@ -299,14 +319,14 @@ class SDS011(object):
     def write_command(self, cmd, data=[]):
         x = SDS011._cmd(cmd, data)
         logdbg("write: %s" % _fmt(x))
-        self.serial_port.write(x)
+        self.serial_port.write(x.encode())
 
     def read_bytes(self):
         x = 0
-        while x != "\xaa":
+        while x != b"\xaa":
             x = self.serial_port.read(size=1)
         data = self.serial_port.read(size=9)
-        logdbg("read: %s" % _fmt(data))
+        logdbg("read: %s" % (data))
         return x + data
 
     def get_firmware_version(self):
@@ -377,7 +397,7 @@ if __name__ == '__main__':
     (options, _) = parser.parse_args()
 
     if options.version:
-        print "driver version %s" % DRIVER_VERSION
+        print ("driver version %s" % DRIVER_VERSION)
         exit(1)
 
     if options.debug is not None:
@@ -386,7 +406,7 @@ if __name__ == '__main__':
     else:
         syslog.setlogmask(syslog.LOG_UPTO(syslog.LOG_INFO))
 
-    s = SDS011(options.port, options.timeout)
+    s = SDS011Extension(options.port, {})
     s.open()
 
     if options.info:
