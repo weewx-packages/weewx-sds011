@@ -1,11 +1,92 @@
 weewx-sds011
 Copyright 2021- sbsRouteur
+Copyright 2019 Matthew Wall
+Distributed under the terms of GPLv3; see license.
 
-Distributed under terms of GPL V3T licence
+Read PM2.5 and PM10 mass concentrations from a Nova SDS011 particulate sensor
+over a serial connection. The module offers a WeeWX station driver and a
+service that adds pm2_5 and pm10_0 to an existing driver's LOOP packets.
 
-Based on Matthew wall driver, this is a service for weewx that collects data from SDS011 particulate sensor, and inserts them in the main recording loop.
+This repository mirrors [sbsrouteur/weewx-sds011](https://github.com/sbsrouteur/weewx-sds011).
+Use the separately repaired catalog archive `0.2.post20261022` below.
+A source-branch ZIP does not include those packaging repairs. The catalog repair preserves serial protocol octets on Python 3.
 
-Sensors' names are hardcoded as :
-- pm2_5
-- pm10_0
-.
+Installation
+
+Use WeeWX 5.5–5.x, Python 3.10–3.14 and pyserial in the WeeWX environment:
+
+python -m pip install pyserial
+
+Install the published archive with WeeWX 5's extension installer:
+
+```sh
+weectl extension install https://github.com/weewx-packages/catalog/releases/download/sds011/v0.2.post20261022/sds011-0.2.post20261022.tar.gz
+```
+
+Use the `weectl` from your WeeWX environment. Add
+`--config /path/to/weewx.conf` when the station configuration is not found
+automatically. Package installations may require `sudo`; activate the WeeWX
+virtual environment for pip installations. Restart your WeeWX service after
+configuration, for example `sudo systemctl restart weewx` on systemd.
+The installer does not restart it for you.
+
+The installer copies bin/user/sds011.py and adds pm_binding with a pm.sdb
+configuration. It does not register a service or select the station driver.
+The binding alone does not collect or save readings to a separate PM database.
+Choose one of the following modes.
+
+Use alongside an existing weather station
+
+Keep your current Station section. Append user.sds011.SDS011Extension to the
+existing data_services list in [Engine][[Services]]. Preserve all existing
+services. This service reads its options at the TOP LEVEL of weewx.conf:
+
+port = /dev/ttyUSB0
+timeout = 3
+poll_interval = 30
+max_tries = 3
+retry_wait = 5
+
+[Engine]
+    [[Services]]
+        # Append user.sds011.SDS011Extension to the existing data_services value.
+
+Place those scalar options before the first section. A [SDS011] section does
+not configure this service. Use a port accessible to the WeeWX account.
+The sensor uses 9600 baud. pm2_5 and pm10_0 need matching columns in the main
+archive if you want them stored. Restart WeeWX after editing configuration.
+
+Use as the station driver
+
+For a station dedicated to the SDS011, select:
+
+[Station]
+    station_type = SDS011
+[SDS011]
+    driver = user.sds011
+    port = /dev/ttyUSB0
+    poll_interval = 30
+
+Do not also enable SDS011Extension for the same device. The driver configuration
+editor is available through weectl station reconfigure --driver user.sds011.
+
+Operation and limits
+
+Check the WeeWX log for serial access and readings. Poll no faster than once
+per 10 seconds. The service performs synchronous serial reads/retries in its
+LOOP callback, enables WeeWX debugging and prints timing information.
+Its exhausted-retry path still references an undefined method variable;
+serial failures can therefore raise NameError. The catalog serial-byte repair
+does not change those service behaviours. No physical sensor was used for the
+documentation checks.
+
+For available diagnostic options, run this without opening the device:
+
+PYTHONPATH=/path/to/station/bin python -m user.sds011 --help
+
+Upgrade or remove
+
+Back up configuration and databases before installing a newer fixed archive.
+Remove manually added service/driver configuration when uninstalling with
+weectl extension uninstall sds011, then restart WeeWX. Keep a working station
+driver configured.
